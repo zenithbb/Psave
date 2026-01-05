@@ -1,0 +1,23 @@
+# Rust
+/target
+/target-linux
+**/*.rs.bk
+
+# Node/Frontend
+/client/dist
+/client/node_modules
+
+# Logs
+*.log
+
+# Databases
+*.db
+*.db-shm
+*.db-wal
+
+# OS files
+.DS_Store
+
+# Executables
+/server-linux-x64
+client_app
