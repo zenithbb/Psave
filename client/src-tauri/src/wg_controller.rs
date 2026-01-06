@@ -74,23 +74,27 @@ impl WgController {
              return Err(anyhow::anyhow!("Invalid Virtual IP format: {}", virtual_ip));
         }
 
-        let mut config = tun::Configuration::default();
-        config
-            .address((ip_parts[0], ip_parts[1], ip_parts[2], ip_parts[3]))
-            .netmask((255, 255, 255, 0))
-            .up();
-        
-        #[cfg(target_os = "linux")]
-        config.platform(|config| { config.packet_information(true); });
-
-        let tun_device = tun::create_as_async(&config).map_err(|e| anyhow::anyhow!("Failed to create TUN: {}", e))?;
-        let tun_name = tun_device.get_ref().name().unwrap_or_default();
-        println!("Created TUN device: {}", tun_name);
-
-        // 2. Bind UDP Socket
+        // 1. Bind UDP Socket first (it's Send, so we can await)
         let udp_socket = tokio::net::UdpSocket::bind(format!("0.0.0.0:{}", local_port)).await?;
         println!("UDP Socket bound to {}", udp_socket.local_addr()?);
         let udp_socket = Arc::new(udp_socket);
+
+        // 2. Create TUN device (keep non-Send config in a narrow scope)
+        let tun_device = {
+            let mut config = tun::Configuration::default();
+            config
+                .address((ip_parts[0], ip_parts[1], ip_parts[2], ip_parts[3]))
+                .netmask((255, 255, 255, 0))
+                .up();
+            
+            #[cfg(target_os = "linux")]
+            config.platform(|config| { config.packet_information(true); });
+
+            tun::create_as_async(&config).map_err(|e| anyhow::anyhow!("Failed to create TUN: {}", e))?
+        };
+
+        let tun_name = tun_device.get_ref().name().unwrap_or_default();
+        println!("Created TUN device: {}", tun_name);
 
         // 3. Routing and Peer State
         let mut peers: HashMap<String, Arc<Mutex<PeerState>>> = HashMap::new();
