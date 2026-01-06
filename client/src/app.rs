@@ -27,20 +27,24 @@ fn Home() -> impl IntoView {
     });
 
     Effect::new(move |_| {
-        if let Some(Ok(c)) = load_config.get() {
-            set_config.set(c.clone());
-            if c.token.is_none() {
-                navigate("/auth", Default::default());
-            } else if let (Some(server), Some(pk), Some(sk)) = (c.server_url.clone(), c.public_key.clone(), c.private_key.clone()) {
-                let vip = c.virtual_ip.clone().unwrap_or_else(|| "10.0.0.2".to_string());
-                spawn_local(async move {
-                    let _ = crate::invoke::start_wg_interface(sk, vip).await;
-                    let _ = crate::invoke::start_signaling(server, pk).await;
-                });
+        if let Some(wrapper) = load_config.get() {
+            match &*wrapper {
+                Ok(c) => {
+                    set_config.set(c.clone());
+                    if c.token.is_none() {
+                        navigate("/auth", Default::default());
+                    } else if let (Some(server), Some(pk), Some(sk)) = (c.server_url.clone(), c.public_key.clone(), c.private_key.clone()) {
+                        let vip = c.virtual_ip.clone().unwrap_or_else(|| "10.0.0.2".to_string());
+                        spawn_local(async move {
+                            let _ = crate::invoke::start_wg_interface(sk, vip).await;
+                            let _ = crate::invoke::start_signaling(server, pk).await;
+                        });
+                    }
+                },
+                Err(_) => {
+                    navigate("/auth", Default::default());
+                }
             }
-        } else if let Some(Err(_)) = load_config.get() {
-             // If config file is missing or broken, assume not logged in
-             navigate("/auth", Default::default());
         }
     });
 
