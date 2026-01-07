@@ -152,18 +152,8 @@ fn Home() -> impl IntoView {
                                                     <div style="display:flex; flex-direction:column; flex: 1">
                                                         <div style="display:flex; align-items:center">
                                                             <span class=format!("online-dot {}", if d.is_online { "online" } else { "offline" })></span>
-                                                            <strong style="font-size: 15px">{d.name.clone()}</strong>
+                                                            <span style="font-weight:bold">{d.name}</span>
                                                         </div>
-                                                        <span style="font-size:10px; color:#9ca3af; margin-left: 16px; font-family: monospace">"ID: " {d.id.to_string()[..8].to_string()}</span>
-                                                    </div>
-                                                    <div style="display:flex; align-items:center; gap: 8px">
-                                                        {if d.is_online {
-                                                            view! {
-                                                                <button class="btn-sm btn-primary" on:click=move |_| {
-                                                                    let key = d.public_key.clone();
-                                                                    spawn_local(async move {
-                                                                         let _ = crate::invoke::connect_device(key).await;
-                                                                    });
                                                                 }>"Connect"</button>
                                                                 <a href=format!("/files/10.0.0.1") class="btn-sm btn-outline" style="text-decoration:none">"Browse"</a>
                                                             }.into_any()
@@ -197,7 +187,16 @@ fn Home() -> impl IntoView {
                                 }
                             }}
                         </Suspense>
-                        <button on:click=move |_| { devices.refetch(); }>"Refresh List"</button>
+                        <button style="margin-top:20px; width:100%" on:click=move |_| {
+                    devices.refetch();
+                    spawn_local(async move {
+                         // Wait a bit for refetch to update? Actually refetch is async but we don't wait for it here easily in this closure structure without refactoring.
+                         // Instead, let's just trigger connections to known devices if we have them, or rely on the effect.
+                         // Better: Trigger a manual re-scan of online devices from the resource
+                         // For now, let's just log.
+                         web_sys::console::log_1(&"Manual Refresh Triggered".into());
+                    });
+                }>"Refresh List"</button>
                     </div>
                 }.into_any()
             }
