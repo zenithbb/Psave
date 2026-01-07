@@ -48,6 +48,7 @@ impl ConfigState {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
+        println!("[Debug] Saving config to: {:?}", self.path);
         fs::write(&self.path, content).map_err(|e| e.to_string())
     }
 }
