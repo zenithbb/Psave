@@ -104,16 +104,29 @@ impl SignalingClient {
         });
 
         // Heartbeat task (UDP)
-        let server_host = Url::parse(&server_url)?.host_str().unwrap_or("127.0.0.1").to_string();
+        let server_host = Url::parse(&server_url).ok()
+            .and_then(|u| u.host_str().map(|h| h.to_string()))
+            .unwrap_or_else(|| "127.0.0.1".to_string());
+            
         let my_pk_for_udp = my_pub_key.clone();
         tokio::spawn(async move {
+            use tokio::net::lookup_host;
+            
+            // Resolve hostname to IP
+            let server_addr = match lookup_host(format!("{}:4000", server_host)).await {
+                Ok(mut addrs) => addrs.next().unwrap_or_else(|| "127.0.0.1:4000".parse().unwrap()),
+                Err(e) => {
+                    println!("❌ DNS Lookup failed for UDP: {}", e);
+                    "127.0.0.1:4000".parse().unwrap()
+                }
+            };
+            
             let udp = UdpSocket::bind("0.0.0.0:0").await.unwrap();
-            let server_addr: SocketAddr = format!("{}:4000", server_host).parse().unwrap_or_else(|_| "127.0.0.1:4000".parse().unwrap());
             let msg = SignalingMessage::Register { public_key: my_pk_for_udp };
             let data = serde_json::to_vec(&msg).unwrap();
             
+            println!("🚀 UDP Heartbeat task started. Server: {}", server_addr);
             loop {
-                println!("DEBUG: Sending UDP Heartbeat to {}", server_addr);
                 let _ = udp.send_to(&data, server_addr).await;
                 tokio::time::sleep(Duration::from_secs(10)).await;
             }
