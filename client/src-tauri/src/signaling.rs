@@ -84,6 +84,7 @@ impl SignalingClient {
         });
 
         // Reader task
+        let wg_ctrl_for_reader = wg_controller.clone();
         tokio::spawn(async move {
             while let Some(Ok(msg)) = read.next().await {
                 if let Message::Text(text) = msg {
@@ -92,7 +93,7 @@ impl SignalingClient {
                         match sig_msg {
                             SignalingMessage::PeerInfo { peer_public_key, endpoint, peer_virtual_ip } => {
                                 log::info!("PeerInfo received: {} @ {} (Internal: {})", peer_public_key, endpoint, peer_virtual_ip);
-                                if let Err(e) = wg_controller.add_peer(peer_public_key, endpoint, peer_virtual_ip).await {
+                                if let Err(e) = wg_ctrl_for_reader.add_peer(peer_public_key, endpoint, peer_virtual_ip).await {
                                     log::error!("Failed to add peer: {}", e);
                                 }
                             }
@@ -109,8 +110,27 @@ impl SignalingClient {
             .unwrap_or_else(|| "127.0.0.1".to_string());
             
         let my_pk_for_udp = my_pub_key.clone();
+        let wg_ctrl_for_udp = wg_controller.clone();
         tokio::spawn(async move {
             use tokio::net::lookup_host;
+            
+            // Wait for WgController to bind the socket (give it 1-2 seconds)
+            let mut udp_socket = None;
+            for _ in 0..10 {
+                if let Some(socket) = wg_ctrl_for_udp.get_socket().await {
+                    udp_socket = Some(socket);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+
+            let udp = match udp_socket {
+                Some(s) => s,
+                None => {
+                    println!("⚠️ WgController socket not found, falling back to standalone UDP socket (Hole punching may fail)");
+                    Arc::new(UdpSocket::bind("0.0.0.0:0").await.unwrap())
+                }
+            };
             
             // Resolve hostname to IP
             let server_addr = match lookup_host(format!("{}:4000", server_host)).await {
@@ -121,11 +141,10 @@ impl SignalingClient {
                 }
             };
             
-            let udp = UdpSocket::bind("0.0.0.0:0").await.unwrap();
             let msg = SignalingMessage::Register { public_key: my_pk_for_udp };
             let data = serde_json::to_vec(&msg).unwrap();
             
-            println!("🚀 UDP Heartbeat task started. Server: {}", server_addr);
+            println!("🚀 UDP Heartbeat task started on port {}. Server: {}", udp.local_addr().unwrap().port(), server_addr);
             loop {
                 let _ = udp.send_to(&data, server_addr).await;
                 tokio::time::sleep(Duration::from_secs(10)).await;

@@ -31,13 +31,19 @@ pub struct PeerState {
 
 pub struct WgController {
     cmd_tx: Mutex<Option<mpsc::Sender<WgCommand>>>,
+    udp_socket: Mutex<Option<Arc<tokio::net::UdpSocket>>>,
 }
 
 impl WgController {
     pub fn new() -> Self {
         Self {
-            cmd_tx: Mutex::new(None)
+            cmd_tx: Mutex::new(None),
+            udp_socket: Mutex::new(None),
         }
+    }
+
+    pub async fn get_socket(&self) -> Option<Arc<tokio::net::UdpSocket>> {
+        self.udp_socket.lock().await.clone()
     }
 
     pub fn generate_keys() -> WgKeys {
@@ -74,10 +80,11 @@ impl WgController {
              return Err(anyhow::anyhow!("Invalid Virtual IP format: {}", virtual_ip));
         }
 
-        // 1. Bind UDP Socket first (it's Send, so we can await)
+        // 1. Bind UDP Socket first
         let udp_socket = tokio::net::UdpSocket::bind(format!("0.0.0.0:{}", local_port)).await?;
         println!("UDP Socket bound to {}", udp_socket.local_addr()?);
         let udp_socket = Arc::new(udp_socket);
+        *self.udp_socket.lock().await = Some(udp_socket.clone());
 
         // 2. Create TUN device (keep non-Send config in a narrow scope)
         let tun_device = {
@@ -200,7 +207,18 @@ impl WgController {
                                      boringtun::noise::TunnResult::WriteToTunnelV4(packet, _) | 
                                      boringtun::noise::TunnResult::WriteToTunnelV6(packet, _) => {
                                          println!("DEBUG: [UDP -> TUN] Writing packet to local TUN. Size: {}", packet.len());
-                                         let _ = tun_writer.write_all(packet).await;
+                                         
+                                         #[cfg(target_os = "macos")]
+                                         {
+                                             let mut pi_packet = vec![0u8, 0, 0, 2];
+                                             pi_packet.extend_from_slice(packet);
+                                             let _ = tun_writer.write_all(&pi_packet).await;
+                                         }
+                                         #[cfg(not(target_os = "macos"))]
+                                         {
+                                             let _ = tun_writer.write_all(packet).await;
+                                         }
+                                         
                                          // Update endpoint in case it changed (mobility)
                                          peer.endpoint = src_addr;
                                          break;
