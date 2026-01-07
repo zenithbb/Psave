@@ -154,7 +154,7 @@ fn Home() -> impl IntoView {
                                                             <span class=format!("online-dot {}", if d.is_online { "online" } else { "offline" })></span>
                                                             <span style="font-weight:bold">{d.name.clone()}</span>
                                                         </div>
-                                                        <div style="font-size:0.8em; color:#666">"ID: " {d.id.to_string().split('-').next().unwrap_or("")}</div>
+                                                        <div style="font-size:0.8em; color:#666">"ID: " {d.id.to_string().split('-').next().unwrap_or("").to_string()}</div>
                                                     </div>
                                                     
                                                     <div style="display:flex; align-items:center; gap: 8px">
