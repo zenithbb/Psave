@@ -158,6 +158,7 @@ impl WgController {
                             if let Some(pubkey) = ip_to_pubkey.get(&dest_ip) {
                                 if let Some(peer_state_lock) = peers.get(pubkey) {
                                     let mut peer = peer_state_lock.lock().await;
+                                    println!("DEBUG: [TUN -> UDP] Routing packet to {}. Size: {}", dest_ip, n);
                                     match peer.tunnel.encapsulate(packet, &mut buf_out) {
                                         boringtun::noise::TunnResult::WriteToNetwork(enc_packet) => {
                                             let _ = udp_socket.send_to(enc_packet, peer.endpoint).await;
@@ -165,6 +166,9 @@ impl WgController {
                                         _ => {}
                                     }
                                 }
+                            } else {
+                                // Optional: Log ignored packets to help find offset issues
+                                // println!("DEBUG: Ignoring packet to {}", dest_ip);
                             }
                         }
                     }
@@ -180,12 +184,14 @@ impl WgController {
                                  match peer.tunnel.decapsulate(Some(src_addr.ip()), packet, &mut buf_out) {
                                      boringtun::noise::TunnResult::WriteToTunnelV4(packet, _) | 
                                      boringtun::noise::TunnResult::WriteToTunnelV6(packet, _) => {
+                                         println!("DEBUG: [UDP -> TUN] Writing packet to local TUN. Size: {}", packet.len());
                                          let _ = tun_writer.write_all(packet).await;
                                          // Update endpoint in case it changed (mobility)
                                          peer.endpoint = src_addr;
                                          break;
                                      },
                                      boringtun::noise::TunnResult::WriteToNetwork(packet) => {
+                                         println!("DEBUG: [UDP -> UDP] Sending handshake/response back to peer.");
                                          let _ = udp_socket.send_to(packet, src_addr).await;
                                          break;
                                      }, 
