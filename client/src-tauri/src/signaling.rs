@@ -74,6 +74,7 @@ impl SignalingClient {
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 if let Ok(text) = serde_json::to_string(&msg) {
+                    println!("DEBUG: Sending WS Message: {}", text);
                     if write.send(Message::Text(text)).await.is_err() {
                         log::error!("WS Write error");
                         break;
@@ -112,6 +113,7 @@ impl SignalingClient {
             let data = serde_json::to_vec(&msg).unwrap();
             
             loop {
+                println!("DEBUG: Sending UDP Heartbeat to {}", server_addr);
                 let _ = udp.send_to(&data, server_addr).await;
                 tokio::time::sleep(Duration::from_secs(10)).await;
             }
