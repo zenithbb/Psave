@@ -152,15 +152,32 @@ fn Home() -> impl IntoView {
                                                     <div style="display:flex; flex-direction:column; flex: 1">
                                                         <div style="display:flex; align-items:center">
                                                             <span class=format!("online-dot {}", if d.is_online { "online" } else { "offline" })></span>
-                                                            <span style="font-weight:bold">{d.name}</span>
+                                                            <span style="font-weight:bold">{d.name.clone()}</span>
                                                         </div>
+                                                        <div style="font-size:0.8em; color:#666">"ID: " {d.id.to_string().split('-').next().unwrap_or("")}</div>
+                                                    </div>
+                                                    
+                                                    <div style="display:flex; align-items:center; gap: 8px">
+                                                        <span class="status">{if d.is_online { "Online" } else { "Offline" }}</span>
+                                                        
+                                                        {if d.is_online {
+                                                            let pk = d.public_key.clone();
+                                                            let name = d.name.clone();
+                                                            view! {
+                                                                <button class="btn-sm" style="background:#3b82f6; color:white; border:none; border-radius:4px; padding:4px 8px; cursor:pointer;" on:click=move |_| {
+                                                                    let pk = pk.clone();
+                                                                    let name = name.clone();
+                                                                    spawn_local(async move {
+                                                                        web_sys::console::log_1(&format!("Manual Connect to {}", name).into());
+                                                                        let _ = crate::invoke::connect_device(pk).await;
+                                                                    });
                                                                 }>"Connect"</button>
-                                                                <a href=format!("/files/10.0.0.1") class="btn-sm btn-outline" style="text-decoration:none">"Browse"</a>
                                                             }.into_any()
                                                         } else {
-                                                            view! { <span class="status" style="margin:0; font-size:12px">"Offline"</span> }.into_any()
+                                                            view! { <span/> }.into_any()
                                                         }}
-                                                        <button class="btn-sm btn-danger" on:click=move |_| {
+
+                                                        <button class="btn-sm" style="border:1px solid #fee2e2; background:#fff; color:#ef4444; border-radius:4px; padding:4px 8px; cursor:pointer;" on:click=move |_| {
                                                             let id = d.id.clone();
                                                             let c = valid_config.get();
                                                             spawn_local(async move {
