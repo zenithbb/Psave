@@ -136,25 +136,54 @@ impl WgController {
                             Some(WgCommand::AddPeer { public_key, endpoint, allowed_ips }) => {
                                 println!("Adding Peer: {} @ {}", public_key, endpoint);
                                 if let (Ok(peer_key_bytes), Ok(addr)) = (BASE64.decode(&public_key), endpoint.parse::<SocketAddr>()) {
-                                    if let Ok(bytes) = <[u8; 32]>::try_from(peer_key_bytes.as_slice()) {
+                                    if let Ok(peer_static_bytes) = <[u8; 32]>::try_from(peer_key_bytes.as_slice()) {
                                         let my_secret = StaticSecret::from(private_key_arr);
-                                        let my_pk = PublicKey::from(&my_secret);
+                                        let peer_public = PublicKey::from(peer_static_bytes);
                                         
-                                        let tunnel = boringtun::noise::Tunn::new(
-                                            my_secret, 
-                                            my_pk, 
-                                            Some(bytes), 
-                                            None, 0, None
-                                        ).expect("Failed to create Tunn");
-                                        
-                                        let peer_state = Arc::new(Mutex::new(PeerState {
-                                            tunnel: Box::new(tunnel),
-                                            endpoint: addr,
-                                            internal_ip: allowed_ips.clone(),
-                                        }));
-                                        
-                                        peers.insert(public_key.clone(), peer_state);
-                                        ip_to_pubkey.insert(allowed_ips, public_key);
+                                        // CORRECT: Tunn::new(static_private, peer_static_public, ...)
+                                        match boringtun::noise::Tunn::new(my_secret, peer_public, None, None, 0, None) {
+                                            Ok(tunnel) => {
+                                                let peer_state = Arc::new(Mutex::new(PeerState {
+                                                    tunnel: Box::new(tunnel),
+                                                    endpoint: addr,
+                                                    internal_ip: allowed_ips.clone(),
+                                                }));
+
+                                                peers.insert(public_key.clone(), peer_state.clone());
+                                                ip_to_pubkey.insert(allowed_ips.clone(), public_key.clone());
+
+                                                // --- Background Timer Task ---
+                                                let peer_timer = peer_state.clone();
+                                                let udp_timer = udp_socket.clone();
+                                                tokio::spawn(async move {
+                                                    let mut timer_buf = [0u8; 2048];
+                                                    loop {
+                                                        let mut p = peer_timer.lock().await;
+                                                        match p.tunnel.update_timers(&mut timer_buf) {
+                                                            boringtun::noise::TunnResult::WriteToNetwork(packet) => {
+                                                                let current_addr = p.endpoint;
+                                                                let _ = udp_timer.send_to(packet, current_addr).await;
+                                                            }
+                                                            _ => {}
+                                                        }
+                                                        drop(p);
+                                                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                                                    }
+                                                });
+
+                                                // --- Initial Handshake ---
+                                                let mut p = peer_state.lock().await;
+                                                let mut hs_buf = [0u8; 2048];
+                                                match p.tunnel.encapsulate(&[], &mut hs_buf) {
+                                                    boringtun::noise::TunnResult::WriteToNetwork(packet) => {
+                                                        let _ = udp_socket.send_to(packet, addr).await;
+                                                        println!("DEBUG: Sent proactive handshake to {}", addr);
+                                                    }
+                                                    _ => {}
+                                                }
+                                            },
+                                            Err(e) => println!("❌ Failed to create tunnel for peer: {}", e),
+                                        }
                                     }
                                 }
                             }
