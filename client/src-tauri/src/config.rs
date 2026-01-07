@@ -45,6 +45,9 @@ impl ConfigState {
     pub fn save(&self) -> Result<(), String> {
         let config = self.config.lock().map_err(|e| e.to_string())?;
         let content = serde_json::to_string_pretty(&*config).map_err(|e| e.to_string())?;
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
         fs::write(&self.path, content).map_err(|e| e.to_string())
     }
 }

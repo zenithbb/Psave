@@ -18,13 +18,19 @@ pub async fn login_http(server_url: String, req: LoginRequest) -> Result<AuthRes
 pub async fn register_device_http(server_url: String, token: String, name: String, hardware_id: String, public_key: String) -> Result<String, String> {
     let url = format!("{}/api/register_device", server_url.trim_end_matches('/'));
     let client = reqwest::Client::new();
+    println!("Sending POST request to {}", url);
     let res = client.post(url)
         .header("Authorization", format!("Bearer {}", token))
         .json(&serde_json::json!({ "name": name, "hardware_id": hardware_id, "public_key": public_key }))
-        .send().await.map_err(|e| e.to_string())?;
+        .send().await.map_err(|e| format!("Send Error: {}", e))?;
     
+    println!("Received Response Status: {}", res.status());
+
     if res.status().is_success() {
-        let json: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+        let text = res.text().await.map_err(|e| format!("Read Body Error: {}", e))?;
+        println!("Received Body: {}", text);
+        
+        let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("Parse JSON Error: {}", e))?;
         Ok(json["virtual_ip"].as_str().unwrap_or_default().to_string())
     } else {
         Err(format!("Error: {}", res.status()))

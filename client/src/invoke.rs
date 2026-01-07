@@ -99,7 +99,7 @@ pub async fn start_signaling(server_url: String, my_pub_key: String) -> Result<(
     Ok(())
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct AppConfig {
     #[serde(rename = "server_url")]
     pub server_url: Option<String>,

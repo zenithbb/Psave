@@ -44,6 +44,9 @@ async fn main() {
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:server.db?mode=rwc".to_string());
     let db = sqlx::SqlitePool::connect(&db_url).await.unwrap();
     
+    // Enable WAL mode explicitly
+    sqlx::query("PRAGMA journal_mode=WAL").execute(&db).await.unwrap();
+    
     // 1. Create Users Table
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS users (
@@ -196,6 +199,7 @@ async fn register_device_handler(
     println!("Registering device '{}' (HID: {}) for user '{}'", payload.name, payload.hardware_id, user_id);
 
     // 4. Assign a virtual IP if not already assigned
+    println!("[Debug] Checking existing IP...");
     let existing: Option<(Option<String>,)> = sqlx::query_as("SELECT virtual_ip FROM devices WHERE user_id = ? AND hardware_id = ?")
         .bind(&user_id)
         .bind(&payload.hardware_id)
@@ -203,6 +207,7 @@ async fn register_device_handler(
         .await
         .unwrap_or(None);
 
+    println!("[Debug] Existing IP check done. Calculating new IP...");
     let virtual_ip = if let Some((Some(ip),)) = existing {
         ip
     } else {
@@ -214,6 +219,7 @@ async fn register_device_handler(
             .unwrap_or((0,));
         format!("10.0.0.{}", count.0 + 2)
     };
+    println!("[Debug] IP Calculated: {}. Performing DB Insert/Update...", virtual_ip);
 
     let dev_id = Uuid::new_v4().to_string();
     let res = sqlx::query(
@@ -232,6 +238,8 @@ async fn register_device_handler(
     .bind(&virtual_ip)
     .execute(&state.db)
     .await;
+    
+    println!("[Debug] DB Operation result: {:?}", res.as_ref().map(|_| "Success").unwrap_or("Error"));
 
     match res {
         Ok(_) => Json(serde_json::json!({"status": "success", "device_id": dev_id, "virtual_ip": virtual_ip})).into_response(),

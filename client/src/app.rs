@@ -19,42 +19,68 @@ pub fn App() -> impl IntoView {
 
 #[component]
 fn Home() -> impl IntoView {
-    let navigate = use_navigate();
-    let (config, set_config) = signal(crate::invoke::AppConfig::default());
+    // Config state: None = loading, Some(None) = error/no config, Some(Some(cfg)) = loaded
+    let (config, set_config) = signal::<Option<Option<crate::invoke::AppConfig>>>(None);
     
-    let load_config = LocalResource::new(|| async move {
-        crate::invoke::get_config().await
+    // Load config on mount
+    Effect::new(move |_| {
+        spawn_local(async move {
+            web_sys::console::log_1(&"[Debug] Starting get_config...".into());
+            match crate::invoke::get_config().await {
+                Ok(cfg) => {
+                    web_sys::console::log_1(&format!("[Debug] Config loaded: {:?}", cfg).into());
+                    set_config.set(Some(Some(cfg)));
+                },
+                Err(e) => {
+                    web_sys::console::log_1(&format!("[Debug] Config error: {:?}", e).into());
+                    set_config.set(Some(None));
+                }
+            }
+        });
     });
 
+    // Derived states
+    let is_loading = Memo::new(move |_| config.get().is_none());
+    
+    let should_show_auth = Memo::new(move |_| {
+        match config.get() {
+            None => false, // Still loading
+            Some(None) => true, // Error loading
+            Some(Some(cfg)) => cfg.token.is_none() || cfg.server_url.is_none(),
+        }
+    });
+    
+    let valid_config = Memo::new(move |_| {
+        config.get().flatten()
+    });
+
+    // Effect to handle WireGuard setup when logged in
     Effect::new(move |_| {
-        if let Some(wrapper) = load_config.get() {
-            match &*wrapper {
-                Ok(c) => {
-                    set_config.set(c.clone());
-                    if c.token.is_none() {
-                        navigate("/auth", Default::default());
-                    } else if let (Some(server), Some(pk), Some(sk)) = (c.server_url.clone(), c.public_key.clone(), c.private_key.clone()) {
-                        let vip = c.virtual_ip.clone().unwrap_or_else(|| "10.0.0.2".to_string());
-                        spawn_local(async move {
-                            let _ = crate::invoke::start_wg_interface(sk, vip).await;
-                            let _ = crate::invoke::start_signaling(server, pk).await;
-                        });
-                    }
-                },
-                Err(_) => {
-                    navigate("/auth", Default::default());
+        if let Some(cfg) = valid_config.get() {
+            if cfg.token.is_some() {
+                if let (Some(server), Some(pk), Some(sk)) = (cfg.server_url.clone(), cfg.public_key.clone(), cfg.private_key.clone()) {
+                    let vip = cfg.virtual_ip.clone().unwrap_or_else(|| "10.0.0.2".to_string());
+                    spawn_local(async move {
+                        let _ = crate::invoke::start_wg_interface(sk, vip).await;
+                        let _ = crate::invoke::start_signaling(server, pk).await;
+                    });
                 }
             }
         }
     });
 
     let devices = LocalResource::new(move || {
-        let c = config.get();
+        let c = valid_config.get();
         async move {
-            if let (Some(url), Some(token)) = (c.server_url, c.token) {
-                crate::invoke::list_devices(url, token).await
-            } else {
-                Err("Not logged in".to_string())
+            match c {
+                Some(cfg) => {
+                    if let (Some(url), Some(token)) = (cfg.server_url, cfg.token) {
+                        crate::invoke::list_devices(url, token).await
+                    } else {
+                        Err("Not logged in".to_string())
+                    }
+                },
+                None => Err("Loading...".to_string()),
             }
         }
     });
@@ -75,76 +101,94 @@ fn Home() -> impl IntoView {
     });
 
     view! {
-        <div class="card">
-            <div style="display:flex; justify-content:space-between; align-items:center">
-                <h1>"My Network"</h1>
-                <button class="btn-sm" style="background:#ef4444" on:click=move |_| {
-                    spawn_local(async {
-                        let mut c = crate::invoke::get_config().await.unwrap_or_default();
-                        c.token = None;
-                        let _ = crate::invoke::save_config(c).await;
-                        // Use window reload to hard-reset the app state
-                        let _ = web_sys::window().unwrap().location().reload();
-                    });
-                }>"Logout"</button>
-            </div>
-            
-            <Suspense fallback=|| view! { <p class="status">"Syncing..."</p> }>
-                {move || match devices.get() {
-                    None => view! { <p class="status">"Loading..."</p> }.into_any(),
-                    Some(data) => match (*data).clone() {
-                        Ok(items) => {
-                            let items_view = items.into_iter().map(|d| {
-                                view! {
-                                    <div class="device-item">
-                                        <div style="display:flex; flex-direction:column; flex: 1">
-                                            <div style="display:flex; align-items:center">
-                                                <span class=format!("online-dot {}", if d.is_online { "online" } else { "offline" })></span>
-                                                <strong style="font-size: 15px">{d.name.clone()}</strong>
-                                            </div>
-                                            <span style="font-size:10px; color:#9ca3af; margin-left: 16px; font-family: monospace">"ID: " {d.id.to_string()[..8].to_string()}</span>
-                                        </div>
-                                        <div style="display:flex; align-items:center; gap: 8px">
-                                            {if d.is_online {
-                                                view! {
-                                                    <button class="btn-sm btn-primary" on:click=move |_| {
-                                                        let key = d.public_key.clone();
-                                                        spawn_local(async move {
-                                                             let _ = crate::invoke::connect_device(key).await;
-                                                        });
-                                                    }>"Connect"</button>
-                                                    <a href=format!("/files/10.0.0.1") class="btn-sm btn-outline" style="text-decoration:none">"Browse"</a>
-                                                }.into_any()
-                                            } else {
-                                                view! { <span class="status" style="margin:0; font-size:12px">"Offline"</span> }.into_any()
-                                            }}
-                                            <button class="btn-sm btn-danger" on:click=move |_| {
-                                                let id = d.id.clone();
-                                                let c = config.get();
-                                                spawn_local(async move {
-                                                    if let (Some(url), Some(token)) = (c.server_url, c.token) {
-                                                        let _ = crate::invoke::delete_device(url, token, id.to_string()).await;
-                                                        devices.refetch();
-                                                    }
-                                                });
-                                            }>"Remove"</button>
-                                        </div>
-                                    </div>
-                                }
-                            }).collect_view();
+        {move || {
+            if is_loading.get() {
+                // Still loading config, show loading indicator
+                view! {
+                    <div class="card">
+                        <p class="status">"Loading..."</p>
+                    </div>
+                }.into_any()
+            } else if should_show_auth.get() {
+                // Not logged in or error loading config, show auth page
+                view! { <AuthPage/> }.into_any()
+            } else {
+                // Logged in, show the main content
+                view! {
+                    <div class="card">
+                        <div style="display:flex; justify-content:space-between; align-items:center">
+                            <h1>"My Network"</h1>
+                            <button class="btn-sm" style="background:#ef4444" on:click=move |_| {
+                                spawn_local(async {
+                                    let mut c = crate::invoke::get_config().await.unwrap_or_default();
+                                    c.token = None;
+                                    let _ = crate::invoke::save_config(c).await;
+                                    let _ = web_sys::window().unwrap().location().reload();
+                                });
+                            }>"Logout"</button>
+                        </div>
+                        
+                        <Suspense fallback=|| view! { <p class="status">"Syncing..."</p> }>
+                            {move || match devices.get() {
+                                None => view! { <p class="status">"Loading..."</p> }.into_any(),
+                                Some(data) => match (*data).clone() {
+                                    Ok(items) => {
+                                        let items_view = items.into_iter().map(|d| {
+                                            view! {
+                                                <div class="device-item">
+                                                    <div style="display:flex; flex-direction:column; flex: 1">
+                                                        <div style="display:flex; align-items:center">
+                                                            <span class=format!("online-dot {}", if d.is_online { "online" } else { "offline" })></span>
+                                                            <strong style="font-size: 15px">{d.name.clone()}</strong>
+                                                        </div>
+                                                        <span style="font-size:10px; color:#9ca3af; margin-left: 16px; font-family: monospace">"ID: " {d.id.to_string()[..8].to_string()}</span>
+                                                    </div>
+                                                    <div style="display:flex; align-items:center; gap: 8px">
+                                                        {if d.is_online {
+                                                            view! {
+                                                                <button class="btn-sm btn-primary" on:click=move |_| {
+                                                                    let key = d.public_key.clone();
+                                                                    spawn_local(async move {
+                                                                         let _ = crate::invoke::connect_device(key).await;
+                                                                    });
+                                                                }>"Connect"</button>
+                                                                <a href=format!("/files/10.0.0.1") class="btn-sm btn-outline" style="text-decoration:none">"Browse"</a>
+                                                            }.into_any()
+                                                        } else {
+                                                            view! { <span class="status" style="margin:0; font-size:12px">"Offline"</span> }.into_any()
+                                                        }}
+                                                        <button class="btn-sm btn-danger" on:click=move |_| {
+                                                            let id = d.id.clone();
+                                                            let c = valid_config.get();
+                                                            spawn_local(async move {
+                                                                if let Some(cfg) = c {
+                                                                    if let (Some(url), Some(token)) = (cfg.server_url, cfg.token) {
+                                                                        let _ = crate::invoke::delete_device(url, token, id.to_string()).await;
+                                                                        devices.refetch();
+                                                                    }
+                                                                }
+                                                            });
+                                                        }>"Remove"</button>
+                                                    </div>
+                                                </div>
+                                            }
+                                        }).collect_view();
 
-                            view! {
-                                <div style="margin-top: 20px;">
-                                    {items_view}
-                                </div>
-                            }.into_any()
-                        },
-                        Err(e) => view! { <p class="status" style="color:#ef4444">"Error: " {e}</p> }.into_any(),
-                    }
-                }}
-            </Suspense>
-            <button on:click=move |_| { devices.refetch(); }>"Refresh List"</button>
-        </div>
+                                        view! {
+                                            <div style="margin-top: 20px;">
+                                                {items_view}
+                                            </div>
+                                        }.into_any()
+                                    },
+                                    Err(e) => view! { <p class="status" style="color:#ef4444">"Error: " {e}</p> }.into_any(),
+                                }
+                            }}
+                        </Suspense>
+                        <button on:click=move |_| { devices.refetch(); }>"Refresh List"</button>
+                    </div>
+                }.into_any()
+            }
+        }}
     }
 }
 
@@ -213,10 +257,32 @@ fn AuthPage() -> impl IntoView {
                                     config.private_key = Some(sk);
                                     config.virtual_ip = Some(vip);
                                     
-                                    let _ = crate::invoke::save_config(config).await;
+                                    let window = web_sys::window().unwrap();
+                                    
+                                    web_sys::console::log_1(&"DEBUG: Registration success. Saving config...".into());
+                                    // 3. Save Config
+                                    match crate::invoke::save_config(config).await {
+                                        Ok(_) => {
+                                            web_sys::console::log_1(&"DEBUG: Config saved successfully.".into());
+                                            // window.alert_with_message("Config Saved!").unwrap(); // Uncomment if needed
+                                        },
+                                        Err(e) => {
+                                            let msg = format!("DEBUG: Config save failed: {}", e);
+                                            web_sys::console::log_1(&msg.clone().into());
+                                            window.alert_with_message(&msg).unwrap();
+                                        },
+                                    }
+
+                                    web_sys::console::log_1(&"DEBUG: Navigating to home...".into());
                                     navigate("/", Default::default());
+                                    
+                                    // Fallback: Force reload if navigate fails
+                                    // let _ = window.location().reload(); 
                                 },
-                                Err(e) => set_status.set(format!("Device Error: {}", e)),
+                                Err(e) => {
+                                    set_status.set(format!("Device Error: {}", e));
+                                    web_sys::window().unwrap().alert_with_message(&format!("Registration Failed: {}", e)).unwrap();
+                                }
                             }
                         }
                     },
