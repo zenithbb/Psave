@@ -75,7 +75,18 @@ fn Home() -> impl IntoView {
             match c {
                 Some(cfg) => {
                     if let (Some(url), Some(token)) = (cfg.server_url, cfg.token) {
-                        crate::invoke::list_devices(url, token).await
+                        let res = crate::invoke::list_devices(url, token).await;
+                        // Auto-connect to online peers
+                        if let Ok(ref devices) = res {
+                            for dev in devices.iter() {
+                                if dev.is_online {
+                                    // Avoid connecting to self? Ideally we check my_pub_key but connect_device is harmless
+                                    web_sys::console::log_1(&format!("DEBUG: Initiating connection to peer: {}", dev.name).into());
+                                    let _ = crate::invoke::connect_device(dev.public_key.clone()).await;
+                                }
+                            }
+                        }
+                        res
                     } else {
                         Err("Not logged in".to_string())
                     }
