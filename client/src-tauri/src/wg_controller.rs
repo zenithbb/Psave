@@ -150,25 +150,25 @@ impl WgController {
                     res = tun_reader.read(&mut buf_tun) => {
                         if let Ok(n) = res {
                             let packet = &buf_tun[..n];
-                            if n < 20 { continue; } // Too small for IPv4
+                            if n < 20 { continue; } 
+                            
+                            // macOS utun adds a 4-byte header (00 00 00 02 for IPv4)
+                            let offset = if packet[0] == 0 && packet[1] == 0 && n >= 24 { 4 } else { 0 };
                             
                             // Simple IPv4 Destination IP Extraction
-                            let dest_ip = format!("{}.{}.{}.{}", packet[16], packet[17], packet[18], packet[19]);
+                            let dest_ip = format!("{}.{}.{}.{}", packet[offset + 16], packet[offset + 17], packet[offset + 18], packet[offset + 19]);
                             
                             if let Some(pubkey) = ip_to_pubkey.get(&dest_ip) {
                                 if let Some(peer_state_lock) = peers.get(pubkey) {
                                     let mut peer = peer_state_lock.lock().await;
                                     println!("DEBUG: [TUN -> UDP] Routing packet to {}. Size: {}", dest_ip, n);
-                                    match peer.tunnel.encapsulate(packet, &mut buf_out) {
+                                    match peer.tunnel.encapsulate(&packet[offset..], &mut buf_out) {
                                         boringtun::noise::TunnResult::WriteToNetwork(enc_packet) => {
                                             let _ = udp_socket.send_to(enc_packet, peer.endpoint).await;
                                         },
                                         _ => {}
                                     }
                                 }
-                            } else {
-                                // Optional: Log ignored packets to help find offset issues
-                                // println!("DEBUG: Ignoring packet to {}", dest_ip);
                             }
                         }
                     }
