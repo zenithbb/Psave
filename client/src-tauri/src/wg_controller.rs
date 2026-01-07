@@ -96,6 +96,18 @@ impl WgController {
         let tun_name = tun_device.get_ref().name().unwrap_or_default();
         println!("Created TUN device: {}", tun_name);
 
+        #[cfg(target_os = "macos")]
+        {
+            // On macOS, we need to manually add the subnet route to the routing table
+            let status = std::process::Command::new("route")
+                .args(&["add", "-net", "10.0.0.0/24", "-interface", &tun_name])
+                .status();
+            match status {
+                Ok(s) if s.success() => println!("✅ Added subnet route for {}", tun_name),
+                _ => println!("⚠️ Failed to add subnet route or it already exists (requires sudo)"),
+            }
+        }
+
         // 3. Routing and Peer State
         let mut peers: HashMap<String, Arc<Mutex<PeerState>>> = HashMap::new();
         let mut ip_to_pubkey: HashMap<String, String> = HashMap::new();
@@ -150,6 +162,9 @@ impl WgController {
                     res = tun_reader.read(&mut buf_tun) => {
                         if let Ok(n) = res {
                             let packet = &buf_tun[..n];
+                            if n >= 4 {
+                                println!("DEBUG: [TUN READ] {} bytes, Lead: {:02x} {:02x} {:02x} {:02x}", n, packet[0], packet[1], packet[2], packet[3]);
+                            }
                             if n < 20 { continue; } 
                             
                             // macOS utun adds a 4-byte header (00 00 00 02 for IPv4)
